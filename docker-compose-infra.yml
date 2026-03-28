@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  # LLM Gateway Router
+  bifrost:
+    image: bifrost:latest # Replace with actual image (e.g., litellm/litellm if it's a standard equivalent)
+    container_name: openmiro-bifrost
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/bifrost.yaml:/app/config.yaml:ro
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+    restart: unless-stopped
+
+  # Local LLM Inference
+  ollama:
+    image: ollama/ollama:latest
+    container_name: openmiro-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Remove comment below if you have a GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+  # Vector / Graph Memory Database
+  hindsight:
+    image: hindsight:latest # Replace with actual custom image or specific DB like chromadb/qdrant
+    container_name: openmiro-hindsight
+    ports:
+      - "8000:8000"
+    volumes:
+      - hindsight_data:/data
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  hindsight_data:
