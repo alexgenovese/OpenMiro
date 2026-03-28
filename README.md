@@ -55,13 +55,16 @@ docker-compose -f docker-compose-infra.yml up -d
 ```
 
 This will boot:
-- **Ollama:** For local LLM inference.
-- **Hindsight:** The vector/graph memory database.
-- **Bifrost:** The LLM router/load balancer.
+- **Ollama:** For local LLM inference (port 11434).
+- **Hindsight:** The vector/graph memory database (API: 8888, UI: 9999).
+- **Bifrost:** The LLM router/load balancer (UI & API: 8080).
 
 ### Verify the Setup
 
-Execute an OpenAI-compatible request pointing to Bifrost. It will automatically route it to Ollama:
+1. **Bifrost**: Open `http://localhost:8080` to configure the router via the Web UI (add Ollama as a provider).
+2. **Hindsight**: Open `http://localhost:9999` for the Hindsight UI, or test the API on `http://localhost:8888`.
+
+Execute an OpenAI-compatible request pointing to Bifrost once configured:
 
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
@@ -71,3 +74,27 @@ curl -X POST http://localhost:8080/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello, are you routed through Bifrost?"}]
   }'
 ```
+
+## Getting Started: Release 1 (Core Engine)
+
+This release implements the core Python simulation engine (OASIS) using CAMEL-AI agents hooked into the Hindsight memory database and Bifrost for inference.
+
+### Run the Simulation
+
+1. Make sure you have Python 3.10+ installed.
+2. Setup the virtual environment and install dependencies:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install camel-ai openai hindsight-client pyyaml pydantic python-dotenv
+   ```
+3. Copy the `.env.example` file to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+4. Run the main simulation script:
+   ```bash
+   # Make sure you are in the project root directory
+   export PYTHONPATH=$PYTHONPATH:$(pwd)
+   python src/main.py
+   ```

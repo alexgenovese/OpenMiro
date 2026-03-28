@@ -133,7 +133,7 @@ simulation:
     channel_prefix: "openmiro:sim_events:"
 
 memory:
-  hindsight_url: "http://localhost:8000"
+  hindsight_url: "http://localhost:8888"
   namespace: "openmiro_prod"
   retrieval_top_k: 5
 ```

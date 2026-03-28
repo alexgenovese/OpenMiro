@@ -3,14 +3,12 @@ version: "3.8"
 services:
   # LLM Gateway Router
   bifrost:
-    image: bifrost:latest # Replace with actual image (e.g., litellm/litellm if it's a standard equivalent)
+    image: maximhq/bifrost:latest
     container_name: openmiro-bifrost
     ports:
       - "8080:8080"
     volumes:
-      - ./config/bifrost.yaml:/app/config.yaml:ro
-    environment:
-      - CONFIG_PATH=/app/config.yaml
+      - ./data/bifrost:/app/data
     restart: unless-stopped
 
   # Local LLM Inference
@@ -33,13 +31,22 @@ services:
 
   # Vector / Graph Memory Database
   hindsight:
-    image: hindsight:latest # Replace with actual custom image or specific DB like chromadb/qdrant
+    image: ghcr.io/vectorize-io/hindsight:latest
     container_name: openmiro-hindsight
     ports:
-      - "8000:8000"
+      - "8888:8888" # API
+      - "9999:9999" # UI
+    environment:
+      # Use Ollama directly for Hindsight's internal processing to avoid needing an API key
+      - HINDSIGHT_API_LLM_PROVIDER=ollama
+      - HINDSIGHT_API_LLM_MODEL=llama3
+      - HINDSIGHT_API_LLM_API_KEY=dummy
+      - HINDSIGHT_API_LLM_BASE_URL=http://openmiro-ollama:11434/v1
     volumes:
-      - hindsight_data:/data
+      - hindsight_data:/home/hindsight/.pg0
     restart: unless-stopped
+    depends_on:
+      - ollama
 
 volumes:
   ollama_data:
