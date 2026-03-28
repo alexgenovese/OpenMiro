@@ -5,6 +5,7 @@ req = urllib.request.Request(
     data=json.dumps({'model': 'ollama/llama3', 'messages': [{'role': 'user', 'content': 'test'}]}).encode('utf-8')
 )
 try:
-    urllib.request.urlopen(req)
+    res = urllib.request.urlopen(req)
+    print("Success:", res.read().decode())
 except urllib.error.HTTPError as e:
     print(e.read().decode())

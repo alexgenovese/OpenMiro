@@ -167,6 +167,10 @@ def main():
             content=msg_content
         )
         
+        # Give Hindsight and Ollama a tiny bit of breathing room to avoid 
+        # connection reset by peer when querying immediately after retaining
+        time.sleep(1)
+        
         # Step 2: Receiver processes and responds
         try:
             response = current_receiver.step(user_msg)

@@ -11,10 +11,10 @@ agents:
     name: "Alice"
     role: "Ingegnera del Software"
     backstory: "Alice è pragmatica, diretta e lavora molto con il codice. Preferisce soluzioni efficienti."
-    model: "ollama/llama3" # Cambiato a ollama/llama3 per test locale out-of-the-box
+    model: "ollama-local/llama3" # Cambiato a ollama-local per matchare il provider appena creato
     
   - id: "agent_bob"
     name: "Bob"
     role: "Product Manager"
     backstory: "Bob è entusiasta, a volte un po' caotico, ma sempre focalizzato sull'utente finale. Fa molte domande."
-    model: "ollama/llama3" # Formato provider/modello richiesto da Bifrost
+    model: "ollama-local/llama3" # Formato provider/modello richiesto da Bifrost

@@ -40,36 +40,42 @@ class HindsightMemoryBlock(MemoryBlock):
                 "metadata": metadata
             })
             
-        if items:
-            self.client.retain_batch(self.bank_id, items)
+        try:
+            logger.info(f"Retaining {len(items)} records in bank {self.bank_id}")
+            self.client.retain_batch(self.bank_id, items, timeout=30)
+            logger.info("Retain successful")
+        except Exception as e:
+            logger.error(f"Failed to retain records: {e}")
 
     def retrieve(self, keyword: str, limit: int = 3) -> List[ContextRecord]:
         if not keyword:
             return []
             
-        # Recall from Hindsight using the keyword
-        response = self.client.recall(
-            bank_id=self.bank_id,
-            query=keyword,
-            max_tokens=2048,
-        )
-        
         context_records = []
-        for res in response.results:
-            if not res.metadata or "record_dict" not in res.metadata:
-                continue
-                
-            record_json = res.metadata["record_dict"]
-            try:
-                record_dict = json.loads(record_json)
-                mem_record = MemoryRecord.from_dict(record_dict)
-                context_records.append(ContextRecord(
-                    memory_record=mem_record,
-                    score=1.0, 
-                    timestamp=mem_record.timestamp,
-                ))
-            except Exception as e:
-                logger.error(f"Failed to reconstruct MemoryRecord: {e}")
+        try:
+            response = self.client.recall(
+                bank_id=self.bank_id,
+                query=keyword,
+                max_tokens=2048,
+                timeout=30
+            )
+            for res in response.results:
+                if not res.metadata or "record_dict" not in res.metadata:
+                    continue
+                    
+                record_json = res.metadata["record_dict"]
+                try:
+                    record_dict = json.loads(record_json)
+                    mem_record = MemoryRecord.from_dict(record_dict)
+                    context_records.append(ContextRecord(
+                        memory_record=mem_record,
+                        score=1.0, 
+                        timestamp=mem_record.timestamp,
+                    ))
+                except Exception as e:
+                    logger.error(f"Failed to reconstruct MemoryRecord: {e}")
+        except Exception as e:
+            logger.error(f"Failed to recall records: {e}")
                 
         return context_records[:limit]
 
