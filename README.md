@@ -1,28 +1,28 @@
-# OpenMiro v2.0
+# OpenMiro
 
 **The Event-Driven Multi-Agent Simulation Platform**
 
-OpenMiro v2 is a complete rewrite of the original MiroFish architecture, designed from the ground up for massive scalability, near-zero latency, and extreme modularity. It serves as a persistent, real-time simulation engine for digital worlds governed by intelligent, autonomous agents.
+OpenMiro is a complete rewrite of the original MiroFish architecture, designed from the ground up for massive scalability, near-zero latency, and extreme modularity. It serves as a persistent, real-time simulation engine for digital worlds governed by intelligent, autonomous agents.
 
-## Why OpenMiro v2? (Advantages over MiroFish)
+## Why OpenMiro? (Advantages over MiroFish)
 
-The legacy MiroFish architecture suffered from severe bottlenecks due to synchronous coupling and its reliance on Zep. OpenMiro v2 resolves these core issues:
+The legacy MiroFish architecture suffered from severe bottlenecks due to synchronous coupling and its reliance on Zep. OpenMiro resolves these core issues:
 
 1. **True Asynchronous Execution vs. Synchronous Blocking:**
    - **MiroFish:** LLM inferences blocked the frontend, causing UI freezes and severe lag as the number of agents increased.
-   - **OpenMiro v2:** Entirely event-driven. The frontend is decoupled through WebSockets/SSE. The simulation engine (OASIS) runs as a background worker pushing JSON payloads to a Redis Event Bus. The UI updates instantly without waiting for the LLM.
+   - **OpenMiro:** Entirely event-driven. The frontend is decoupled through WebSockets/SSE. The simulation engine (OASIS) runs as a background worker pushing JSON payloads to a Redis Event Bus. The UI updates instantly without waiting for the LLM.
 
 2. **Hindsight vs. Zep:**
    - **MiroFish:** Used Zep, which proved to be a bottleneck for complex agent memories and lacked optimal integration with our specific interaction graphs.
-   - **OpenMiro v2:** Introduces **Hindsight**, a custom vector/graph database built specifically to plug into CAMEL-AI. It provides superior context retrieval and persistent memory, allowing agents to instantly recall conversations even after the system is restarted.
+   - **OpenMiro:** Introduces **Hindsight**, a custom vector/graph database built specifically to plug into CAMEL-AI. It provides superior context retrieval and persistent memory, allowing agents to instantly recall conversations even after the system is restarted.
 
 3. **Bifrost Gateway (LLM Agnostic) vs. Hardcoded Endpoints:**
    - **MiroFish:** Coupled directly to specific LLM providers, making fallback and cost-optimization difficult.
-   - **OpenMiro v2:** Uses the **Bifrost Gateway** as a universal LLM router. The core engine only speaks the standard OpenAI dialect. Bifrost dynamically routes traffic to local models (Ollama), xAI (Grok), or OpenAI based on real-time availability and predefined rules (`bifrost.yaml`).
+   - **OpenMiro:** Uses the **Bifrost Gateway** as a universal LLM router. The core engine only speaks the standard OpenAI dialect. Bifrost dynamically routes traffic to local models (Ollama), xAI (Grok), or OpenAI based on real-time availability and predefined rules (`bifrost.yaml`).
 
 4. **Microservices Architecture vs. Monolith:**
    - **MiroFish:** Tightly coupled application logic.
-   - **OpenMiro v2:** Split into independently scalable components: 
+   - **OpenMiro:** Split into independently scalable components: 
      - FastAPI backend for orchestration and auth.
      - Realtime Server (Node/FastAPI) for WebSocket connections.
      - Python Background Workers for the OASIS engine.

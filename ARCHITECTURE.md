@@ -1,11 +1,11 @@
-Ecco il **Documento Tecnico Architetturale per OpenMiro (v2.0)**. Puoi copiare interamente questo testo e incollarlo in una nuova conversazione per riprendere lo sviluppo esattamente da qui.
+Ecco il **Documento Tecnico Architetturale per OpenMiro**. Puoi copiare interamente questo testo e incollarlo in una nuova conversazione per riprendere lo sviluppo esattamente da qui.
 
 ***
 
-# 📘 OPENMIRO V2.0 - MASTER ARCHITECTURE DOCUMENT
+# 📘 OPENMIRO - MASTER ARCHITECTURE DOCUMENT
 
 ## 1. Visione d'Insieme
-OpenMiro v2 è una piattaforma di simulazione multi-agente per mondi digitali, riscritta da zero per garantire scalabilità, latenza minima e modularità. Il sistema abbandona i colli di bottiglia legacy (Zep, accoppiamento sincrono) in favore di un'architettura a microservizi guidata da eventi, basata sul framework **CAMEL-AI (OASIS)**, con **Hindsight** per la memoria persistente e **Bifrost** come gateway unificato per i modelli LLM.
+OpenMiro è una piattaforma di simulazione multi-agente per mondi digitali, riscritta da zero per garantire scalabilità, latenza minima e modularità. Il sistema abbandona i colli di bottiglia legacy (Zep, accoppiamento sincrono) in favore di un'architettura a microservizi guidata da eventi, basata sul framework **CAMEL-AI (OASIS)**, con **Hindsight** per la memoria persistente e **Bifrost** come gateway unificato per i modelli LLM.
 
 ## 2. Architettura del Sistema (ASCII)
 
