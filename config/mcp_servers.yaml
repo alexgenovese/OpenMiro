@@ -1,0 +1,23 @@
+mcp_servers:
+  # OpenSpace: Self-evolving skill engine.
+  # Transport: STDIO — spawned as a subprocess by CAMEL's MCPClient per agent.
+  # Install once: pip install "openspace @ git+https://github.com/HKUDS/OpenSpace.git"
+  # Then run: openspace-mcp --help   to verify the binary is in PATH.
+  - name: "openspace"
+    # STDIO transport: MCPClient spawns this command as a subprocess
+    command: "openspace-mcp"
+    args: []
+    env:
+      # Directory on the HOST where evolved skills are persisted (relative to project root)
+      OPENSPACE_HOST_SKILL_DIRS: "data/openspace/skills"
+      OPENSPACE_WORKSPACE: "data/openspace"
+      # OpenSpace uses litellm internally — point it at the same LLM endpoint
+      OPENSPACE_MODEL: "openai/qwen3.5-9b"
+      OPENSPACE_LLM_API_BASE: ""   # Loaded at runtime from OPENAI_BASE_URL env var
+      OPENSPACE_LLM_API_KEY: ""    # Loaded at runtime from OPENAI_API_KEY env var
+      # Optional: cloud community key (leave empty for local-only operation)
+      OPENSPACE_API_KEY: ""
+    # Timeout per tool call (seconds). OpenSpace may take time to auto-fix failing scripts.
+    tool_timeout: 600
+    # Only agents with tools_enabled: true in simulation_rules.yaml will mount this server.
+    required_capability: "tools_enabled"

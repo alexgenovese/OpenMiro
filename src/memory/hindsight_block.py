@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from typing import List, Optional
 
 from camel.memories.base import MemoryBlock, AgentMemory, BaseContextCreator
@@ -11,9 +12,11 @@ from hindsight_client import Hindsight
 logger = logging.getLogger(__name__)
 
 class HindsightMemoryBlock(MemoryBlock):
-    def __init__(self, client: Hindsight, bank_id: str):
+    def __init__(self, client: Hindsight, bank_id: str) -> None:
         self.client = client
         self.bank_id = bank_id
+        # Store connection details for creating per-thread clients (aiohttp event loop safety)
+        self._base_url: str = str(client._api_client.configuration.host)
         try:
             # We try to create the bank, it may fail if it already exists
             self.client.create_bank(self.bank_id)
@@ -39,13 +42,34 @@ class HindsightMemoryBlock(MemoryBlock):
                 "content": content,
                 "metadata": metadata
             })
-            
-        try:
-            logger.info(f"Retaining {len(items)} records in bank {self.bank_id}")
-            self.client.retain_batch(self.bank_id, items, timeout=30)
+
+        logger.info(f"Retaining {len(items)} records in bank {self.bank_id}")
+        _err: List[Optional[Exception]] = [None]
+
+        # Create a fresh Hindsight client per thread to avoid aiohttp/asyncio event loop
+        # conflicts: the ApiClient's session is bound to the loop of its creation thread.
+        _base_url = self._base_url
+        _bank_id = self.bank_id
+
+        def _do_retain() -> None:
+            _thread_client = Hindsight(base_url=_base_url, api_key="dummy_key")
+            try:
+                _thread_client.retain_batch(_bank_id, items)
+            except Exception as exc:
+                _err[0] = exc
+
+        t = threading.Thread(target=_do_retain, daemon=True)
+        t.start()
+        t.join(timeout=30)
+        if t.is_alive():
+            logger.warning(
+                f"retain_batch timed out after 30s for bank {self.bank_id} — "
+                "skipping, background consolidation may still complete"
+            )
+        elif _err[0] is not None:
+            logger.error(f"Failed to retain records: {_err[0]}")
+        else:
             logger.info("Retain successful")
-        except Exception as e:
-            logger.error(f"Failed to retain records: {e}")
 
     def retrieve(self, keyword: str, limit: int = 3) -> List[ContextRecord]:
         if not keyword:
@@ -56,8 +80,7 @@ class HindsightMemoryBlock(MemoryBlock):
             response = self.client.recall(
                 bank_id=self.bank_id,
                 query=keyword,
-                max_tokens=2048,
-                timeout=30
+                max_tokens=2048
             )
             for res in response.results:
                 if not res.metadata or "record_dict" not in res.metadata:

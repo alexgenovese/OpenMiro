@@ -1,7 +1,12 @@
 version: "3.8"
 
+# NOTE: OpenSpace (self-evolving skills engine) is NOT a Docker service.
+# It runs as a local stdio MCP process spawned by CAMEL agents at runtime.
+# Install it once with: pip install "openspace @ git+https://github.com/HKUDS/OpenSpace.git"
+# Evolved skills are persisted locally in ./data/openspace/skills/
+
 services:
-  # LLM Gateway Router
+  # LLM Gateway Router (optional: only needed if using local model routing)
   bifrost:
     image: maximhq/bifrost:latest
     container_name: openmiro-bifrost
@@ -37,16 +42,15 @@ services:
       - "8888:8888" # API
       - "9999:9999" # UI
     environment:
-      # Use Ollama directly for Hindsight's internal processing to avoid needing an API key
-      - HINDSIGHT_API_LLM_PROVIDER=ollama
-      - HINDSIGHT_API_LLM_MODEL=llama3
-      - HINDSIGHT_API_LLM_API_KEY=dummy
-      - HINDSIGHT_API_LLM_BASE_URL=http://openmiro-ollama:11434/v1
+      # Route through Bifrost (Docker internal network: bifrost:8080)
+      - HINDSIGHT_API_LLM_PROVIDER=openai
+      # Use 9b for consolidation (faster, avoids 30s Bifrost timeout with 122b)
+      - HINDSIGHT_API_LLM_MODEL=Regolo/qwen3.5-9b
+      - HINDSIGHT_API_LLM_API_KEY=${OPENAI_API_KEY:-dummy_key}
+      - HINDSIGHT_API_LLM_BASE_URL=http://bifrost:8080/v1
     volumes:
       - hindsight_data:/home/hindsight/.pg0
     restart: unless-stopped
-    depends_on:
-      - ollama
 
 volumes:
   ollama_data:

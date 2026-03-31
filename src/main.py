@@ -1,192 +1,325 @@
+import argparse
 import os
 import sys
 import time
 import yaml
 import logging
+from enum import Enum
+from typing import Dict, Optional
+
 from dotenv import load_dotenv
 
-# Add the project root to the Python path to allow absolute imports like 'from src...'
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from camel.agents import ChatAgent
 from camel.messages import BaseMessage
 from camel.models import OpenAIModel
 from camel.types import ModelType
+from camel.memories.context_creators import ScoreBasedContextCreator
+from camel.utils.token_counting import OpenAITokenCounter
 
 from hindsight_client import Hindsight
 from src.memory.hindsight_block import HindsightMemoryBlock, HindsightAgentMemory
+from src.channels import ChannelManager
 
-# Setup basic logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _load_config() -> dict:
+    with open("config/simulation_rules.yaml", "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _load_mcp_config() -> dict:
+    path = "config/mcp_servers.yaml"
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _resolve_project(config: dict, project_id: str) -> dict:
+    for project in config.get("projects", []):
+        if project["id"] == project_id:
+            return project
+    available = [p["id"] for p in config.get("projects", [])]
+    raise ValueError(
+        f"Project '{project_id}' not found. Available: {available}"
+    )
+
+
+def _build_model(agent_conf: dict, openai_url: str, openai_api_key: str, default_model: str):
+    """Builds an OpenAIModel with a dynamic model name, bypassing CAMEL's strict Enum.
+    
+    Sets max_tokens=2048 and disables chain-of-thought thinking mode for Qwen3 models
+    (which return content=None if the model exhausts tokens during the reasoning phase).
+    """
+    agent_model_name = agent_conf.get("model", default_model)
+
+    class _DynamicModelType(Enum):
+        DYNAMIC_MODEL = agent_model_name
+
+        @property
+        def token_limit(self) -> int:
+            return 4000
+
+        @property
+        def value_for_tiktoken(self) -> str:
+            return "gpt-4"
+
+    return OpenAIModel(
+        model_type=_DynamicModelType.DYNAMIC_MODEL,
+        url=openai_url,
+        api_key=openai_api_key,
+        model_config_dict={
+            # Qwen3.x thinking models spend ~200+ tokens on internal reasoning before
+            # producing content. Without sufficient budget, content=None is returned.
+            # 4096 covers the reasoning phase + full conversational response.
+            "max_tokens": 4096,
+        },
+    )
+
+
+def _build_agent(
+    agent_conf: dict,
+    project_id: str,
+    project_rules: list,
+    h_client: Hindsight,
+    openai_url: str,
+    openai_api_key: str,
+    default_model: str,
+    token_limit: int = 4000,
+) -> ChatAgent:
+    """
+    Instantiates a ChatAgent for a given agent config.
+    Memory is namespaced as '{project_id}_{agent_id}' to guarantee
+    full isolation between projects with agents sharing the same name.
+    """
+    sys_prompt = (
+        f"Sei {agent_conf['name']}, ruolo: {agent_conf['role']}.\n"
+        f"Backstory: {agent_conf['backstory']}\n\n"
+        "Regole del progetto:\n"
+        + "".join(f"- {r}\n" for r in project_rules)
+    )
+
+    sys_msg = BaseMessage.make_system_message(
+        content=sys_prompt,
+        role_name=agent_conf["name"],
+    )
+
+    model = _build_model(agent_conf, openai_url, openai_api_key, default_model)
+
+    dummy_token_counter = OpenAITokenCounter(ModelType.GPT_4O_MINI)
+    context_creator = ScoreBasedContextCreator(dummy_token_counter, token_limit)
+
+    # --- Critical: scoped bank_id isolates memory per project ---
+    scoped_bank_id = f"{project_id}__{agent_conf['id']}"
+    hindsight_block = HindsightMemoryBlock(client=h_client, bank_id=scoped_bank_id)
+
+    try:
+        hindsight_block.clear()
+    except Exception:
+        pass
+
+    memory = HindsightAgentMemory(
+        context_creator=context_creator,
+        hindsight_block=hindsight_block,
+        retrieve_limit=3,
+        agent_id=agent_conf["id"],
+    )
+
+    agent = ChatAgent(system_message=sys_msg, model=model, memory=memory)
+    agent.reset()
+    return agent
+
+
+def _try_attach_mcp_tools(agent: ChatAgent, agent_conf: dict, mcp_config: dict) -> None:
+    """
+    Attaches OpenSpace MCP tools to the agent via CAMEL's MCPClient (stdio transport).
+    OpenSpace is spawned as a subprocess — it must be installed in the active venv:
+      pip install "openspace @ git+https://github.com/HKUDS/OpenSpace.git"
+    Silently skips if the binary is not found or MCPToolkit raises any error.
+    """
+    if not agent_conf.get("tools_enabled", False):
+        return
+
+    servers = mcp_config.get("mcp_servers", [])
+    if not servers:
+        logger.warning(f"tools_enabled=true for {agent_conf['name']} but no mcp_servers defined.")
+        return
+
+    server_def = servers[0]  # Use the first server (openspace)
+
+    try:
+        import shutil
+        if not shutil.which(server_def["command"]):
+            logger.warning(
+                f"'{server_def['command']}' binary not found in PATH. "
+                "Install OpenSpace: pip install \"openspace @ git+https://github.com/HKUDS/OpenSpace.git\""
+            )
+            return
+
+        from camel.utils.mcp_client import MCPClient, ServerConfig
+        from camel.toolkits import MCPToolkit
+
+        # Build the environment for the subprocess, injecting runtime credentials
+        skills_dir = os.path.abspath(os.path.join(os.getcwd(), "data/openspace/skills"))
+        workspace_dir = os.path.abspath(os.path.join(os.getcwd(), "data/openspace"))
+        os.makedirs(skills_dir, exist_ok=True)
+        os.makedirs(workspace_dir, exist_ok=True)
+
+        mcp_env = {
+            "OPENSPACE_HOST_SKILL_DIRS": skills_dir,
+            "OPENSPACE_WORKSPACE": workspace_dir,
+            # litellm model format for OpenAI-compatible endpoint
+            "OPENSPACE_MODEL": f"openai/{os.environ.get('OPENAI_MODEL_NAME', 'qwen3.5-9b')}",
+            "OPENSPACE_LLM_API_BASE": os.environ.get("OPENAI_BASE_URL", ""),
+            "OPENSPACE_LLM_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+        }
+        # Remove blank values — let OpenSpace fall back to its own defaults for those
+        mcp_env = {k: v for k, v in mcp_env.items() if v}
+
+        config = ServerConfig(
+            command=server_def["command"],
+            args=server_def.get("args", []),
+            env=mcp_env,
+            timeout=float(server_def.get("tool_timeout", 600)),
+        )
+        client = MCPClient(config=config)
+        toolkit = MCPToolkit(clients=[client], skip_failed=True)
+        tools = toolkit.get_tools()
+
+        if tools:
+            # CAMEL ChatAgent accepts extra tools via the tools parameter at step() time.
+            # We store them on the agent instance for use in the simulation loop.
+            agent._openspace_tools = tools  # type: ignore[attr-defined]
+            logger.info(f"[{agent_conf['name']}] OpenSpace MCP: {len(tools)} tools attached.")
+        else:
+            logger.warning(f"[{agent_conf['name']}] OpenSpace MCP connected but returned 0 tools.")
+
+    except ImportError:
+        logger.warning("camel MCPToolkit not available. Skipping MCP tool attachment.")
+    except Exception as e:
+        logger.warning(f"Could not attach MCP tools for {agent_conf['name']}: {e}")
+
+
 def main():
     load_dotenv()
-    logger.info("Loading configuration...")
-    with open("config/simulation_rules.yaml", "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
 
-    rules = config["simulation"]["rules"]
-    agents_conf = config["agents"]
-    
-    # Check if models are properly configured for the user
-    # Provide a helpful guide if they are using default/placeholder models that might fail
-    for ac in agents_conf:
-        model_name = ac.get("model", "")
-        if "claude" in model_name or "gpt" in model_name:
-            if not os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY") == "dummy_key":
-                logger.warning(
-                    f"\n⚠️  ATTENZIONE: L'agente {ac['name']} è configurato per usare '{model_name}'.\n"
-                    f"Se stai usando Bifrost, assicurati di aver configurato il provider (Anthropic/OpenAI) \n"
-                    f"nella UI web all'indirizzo http://localhost:8080.\n"
-                    f"In alternativa, per un test locale immediato senza API Keys, cambia il 'model' \n"
-                    f"in 'config/simulation_rules.yaml' a 'ollama/llama3'.\n"
-                )
+    parser = argparse.ArgumentParser(description="OpenMiro OASIS Simulation Engine")
+    parser.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help="ID of the project to simulate (defined in config/simulation_rules.yaml).",
+    )
+    parser.add_argument("--turns", type=int, default=4, help="Number of simulation turns.")
+    args = parser.parse_args()
 
-    # Setup Hindsight Client
+    config = _load_config()
+    mcp_config = _load_mcp_config()
+
+    global_rules = config.get("global", {}).get("rules", [])
+    default_model = config.get("global", {}).get("default_model", "ollama-local/llama3")
+
+    # Determine which project to run
+    project_id = args.project
+    if project_id is None:
+        # Default to the first defined project
+        project_id = config["projects"][0]["id"]
+        logger.info(f"No --project specified. Defaulting to '{project_id}'.")
+
+    project_conf = _resolve_project(config, project_id)
+    # Project rules override global rules if defined
+    project_rules = project_conf.get("rules", global_rules)
+
+    logger.info(f"Starting project: [{project_conf['id']}] {project_conf['name']}")
+
+    # Infrastructure clients
     hindsight_url = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
-    logger.info(f"Connecting to Hindsight at {hindsight_url}")
     h_client = Hindsight(base_url=hindsight_url, api_key="dummy_key")
 
-    # Setup OpenAI base URL for Bifrost (or any custom OpenAI compatible endpoint)
     openai_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1")
     openai_api_key = os.environ.get("OPENAI_API_KEY", "dummy_key")
-    openai_model_name = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o-mini")
-    logger.info(f"Using OpenAI endpoint at {openai_url} with model {openai_model_name}")
-    
-    agents = {}
-    
-    for ac in agents_conf:
-        # Build System Prompt
-        sys_prompt = f"Sei {ac['name']}, ruolo: {ac['role']}.\n"
-        sys_prompt += f"Backstory: {ac['backstory']}\n\n"
-        sys_prompt += "Regole della simulazione:\n"
-        for r in rules:
-            sys_prompt += f"- {r}\n"
-            
-        sys_msg = BaseMessage.make_system_message(
-            content=sys_prompt,
-            role_name=ac["name"]
-        )
-        
-        # Create Model Backend using standard OpenAI Model wrapper
-        # The true magic of the architecture: we ONLY use OpenAIModel.
-        # Bifrost will translate the API calls to Anthropic, Google, or Ollama natively.
-        agent_model_name = ac.get("model", openai_model_name)
-        
-        # We need a custom ModelType Enum to trick camel-ai into accepting our arbitrary model name.
-        # Otherwise, the token_limit and token_counter properties will crash since they expect an Enum.
-        from enum import Enum
-        from camel.types.enums import ModelType as _CamelModelType
-        
-        class CustomModelType(Enum):
-            DYNAMIC_MODEL = agent_model_name
-            
-            @property
-            def token_limit(self) -> int:
-                return 4000
-                
-            @property
-            def value_for_tiktoken(self) -> str:
-                return "gpt-4"
 
-        model = OpenAIModel(
-            model_type=CustomModelType.DYNAMIC_MODEL,
-            url=openai_url,
-            api_key=openai_api_key,
+    # --- Channel Manager ---
+    channel_manager = ChannelManager()
+    for ch_def in project_conf.get("channels", []):
+        channel_manager.register_channel(ch_def)
+
+    # --- Build all agents for this project ---
+    agents: Dict[str, ChatAgent] = {}
+    agents_conf_map: Dict[str, dict] = {}
+
+    for ac in project_conf["team"]:
+        logger.info(f"Initializing agent: {ac['name']} ({ac['role']})")
+        agent = _build_agent(
+            ac, project_id, project_rules, h_client,
+            openai_url, openai_api_key, default_model,
         )
-        
-        # Ensure token_limit is an integer
-        # Since model_type was changed to string, token_limit property will fail
-        # if accessed directly on the model instance. We default it to 4000
-        token_limit = 4000
-        
-        # We must import ScoreBasedContextCreator to create the context creator
-        from camel.memories.context_creators import ScoreBasedContextCreator
-        
-        # In camel, token_counter expects a valid ModelType enum.
-        # So we trick it by passing GPT_4O_MINI for the token calculation since it uses tiktoken
-        from camel.utils.token_counting import OpenAITokenCounter
-        dummy_token_counter = OpenAITokenCounter(ModelType.GPT_4O_MINI)
-        
-        context_creator = ScoreBasedContextCreator(
-            dummy_token_counter, 
-            token_limit
-        )
-        
-        # Create Memory Blocks
-        hindsight_block = HindsightMemoryBlock(client=h_client, bank_id=ac["id"])
-        
-        # Try clearing for a fresh start, suppress exceptions if bank doesn't exist
-        try:
-            hindsight_block.clear()
-        except Exception:
-            pass
-        
-        memory = HindsightAgentMemory(
-            context_creator=context_creator,
-            hindsight_block=hindsight_block,
-            retrieve_limit=3,
-            agent_id=ac["id"]
-        )
-        
-        # Initialize Agent
-        agent = ChatAgent(
-            system_message=sys_msg,
-            model=model,
-            memory=memory,
-        )
-        agent.reset()
-        
+        _try_attach_mcp_tools(agent, ac, mcp_config)
         agents[ac["name"]] = agent
+        agents_conf_map[ac["name"]] = ac
 
-    alice = agents["Alice"]
-    bob = agents["Bob"]
-    
-    print("\n" + "="*40)
-    print("        OASIS Test Simulation")
-    print("="*40 + "\n")
-    
+    # --- Simulation Loop ---
+    agent_names = list(agents.keys())
+    if len(agent_names) < 2:
+        raise RuntimeError("A project needs at least 2 agents to simulate a conversation.")
+
+    sender_name, receiver_name = agent_names[0], agent_names[1]
+    sender_conf = agents_conf_map[sender_name]
+
+    # Determine the public channel for the main conversation
+    public_channel = next(
+        (ch["id"] for ch in project_conf.get("channels", []) if ch["type"] == "public"),
+        None,
+    )
+
+    print("\n" + "=" * 50)
+    print(f"  Project: {project_conf['name']}")
+    print(f"  Objective: {project_conf.get('objective', 'N/A')}")
+    print("=" * 50 + "\n")
+
+    msg_content = f"Ciao {receiver_name}! Iniziamo a lavorare sull'obiettivo: {project_conf.get('objective', 'simulazione generale')}."
+    print(f"[{sender_name} -> {public_channel or 'direct'}]: {msg_content}")
+
     turn = 0
-    max_turns = 4
-    
-    current_sender_name = "Alice"
-    current_receiver_name = "Bob"
-    current_sender = alice
-    current_receiver = bob
-    
-    # Initial message
-    msg_content = "Ciao Bob! Hai visto l'ultimo aggiornamento del sistema?"
-    
-    print(f"[{current_sender_name}]: {msg_content}")
-    
-    while turn < max_turns:
-        # Step 1: Format message from sender
+    while turn < args.turns:
+        # Post the sender's message to the public channel log
+        if public_channel:
+            channel_manager.post(sender_conf["id"], public_channel, msg_content)
+
+        # Build context with recent channel history
+        channel_ctx = ""
+        if public_channel:
+            channel_ctx = channel_manager.format_context_for_agent(
+                agents_conf_map[receiver_name]["id"], public_channel, last_n=5
+            )
+
         user_msg = BaseMessage.make_user_message(
-            role_name=current_sender_name,
-            content=msg_content
+            role_name=sender_name,
+            content=channel_ctx + msg_content,
         )
-        
-        # Give Hindsight and Ollama a tiny bit of breathing room to avoid 
-        # connection reset by peer when querying immediately after retaining
+
         time.sleep(1)
-        
-        # Step 2: Receiver processes and responds
+
         try:
-            response = current_receiver.step(user_msg)
+            response = agents[receiver_name].step(user_msg)
             msg_content = response.msg.content
         except Exception as e:
-            logger.error(f"Error during {current_receiver_name}'s step: {e}")
+            logger.error(f"Error during {receiver_name}'s step: {e}")
             break
-            
-        print(f"\n[{current_receiver_name}]: {msg_content}")
-        
-        # Step 3: Swap roles
-        current_sender, current_receiver = current_receiver, current_sender
-        current_sender_name, current_receiver_name = current_receiver_name, current_sender_name
-        
+
+        print(f"\n[{receiver_name} -> {public_channel or 'direct'}]: {msg_content}")
+
+        # Swap speaker roles
+        sender_name, receiver_name = receiver_name, sender_name
+        sender_conf = agents_conf_map[sender_name]
+
         turn += 1
         time.sleep(1)
+
 
 if __name__ == "__main__":
     main()
