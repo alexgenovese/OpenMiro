@@ -10,10 +10,6 @@
 
 OpenMiro is a persistent, real-time simulation engine for digital worlds populated by intelligent autonomous agents. Built on [CAMEL-AI (OASIS)](https://github.com/camel-ai/camel), it replaces synchronous, provider-locked architectures with a fully decoupled, config-driven stack — agents think, remember, and act without ever blocking the rest of the system.
 
-```
-[Alice -> public_square]: Ciao Bob! Iniziamo a lavorare sull'obiettivo: validare l'infrastruttura OASIS.
-[Bob -> public_square]: Ciao Alice! Sono pronto. Spero solo che i server non facciano i capricci!
-```
 
 ---
 
@@ -76,6 +72,38 @@ OpenMiro is a persistent, real-time simulation engine for digital worlds populat
 | [Ollama](https://ollama.com) | Local LLM inference (optional) | `11434` |
 | `src/main.py` | Simulation entrypoint — loads config, builds agents, runs turn loop | — |
 | `src/memory/hindsight_block.py` | CAMEL `MemoryBlock` adapter bridging CAMEL ↔ Hindsight | — |
+
+### How Self-Learning Works In A Multi-Agent System
+
+OpenMiro does not "train" model weights. Instead, it enables **runtime self-learning** through persistent memory, role specialization, and iterative multi-turn collaboration.
+
+The learning loop is:
+
+1. **Observe**: each agent receives new messages from allowed channels.
+2. **Reason**: the agent produces a response using its role, rules, and current context.
+3. **Store**: interaction traces are written to Hindsight (vector + graph memory).
+4. **Recall**: on later turns, relevant past memories are retrieved and injected back into context.
+5. **Adapt**: agents refine decisions based on what previously worked, failed, or remained unresolved.
+
+In practice, this creates an emergent team memory where agents become more consistent over time within the same project.
+
+**What improves over multiple turns:**
+
+- Better continuity in task decisions
+- Fewer repeated mistakes
+- Stronger specialization by role (PM, Engineer, QA, etc.)
+- Faster convergence on project goals
+
+**Self-learning flow (conceptual):**
+
+```text
+Turn N input -> Agent reasoning -> Message output -> Hindsight retention
+       ^                                  |
+       |                                  v
+     Memory recall on Turn N+1 <- Retrieved relevant context
+```
+
+Because memory retention runs in background threads with timeout protection, the simulation loop remains responsive while learning signals continue to accumulate asynchronously.
 
 ---
 
@@ -243,6 +271,94 @@ python src/main.py --project <project_id> --turns <N>
 |---|---|
 | `--project` | Project ID from `simulation_rules.yaml` (required) |
 | `--turns` | Number of dialogue turns to simulate (default: `1`) |
+
+## Example Workflows
+
+The examples below show how OpenMiro can be used in practice. In each case, the user defines a project, the goal, the rules, and the team in YAML. OpenMiro then instantiates the agents, assigns their channels, connects memory, and runs the collaboration loop.
+
+### Example 1 — Build a software product
+
+**Scenario:** A user wants to develop a new software product: an internal support bot that reads technical requests and produces implementation plans.
+
+**What the user defines:**
+
+```yaml
+projects:
+  - id: "proj_support_builder"
+    name: "Internal Support Bot"
+    objective: "Design and implement a support bot that reads incoming requests and proposes technical solutions."
+    rules:
+      - "All proposals must include implementation steps."
+      - "The team must identify blockers early."
+    channels:
+      - id: "team_room"
+        type: "public"
+      - id: "eng_private"
+        type: "private"
+        members: ["agent_alice", "agent_eve"]
+    team:
+      - id: "agent_alice"
+        name: "Alice"
+        role: "Lead Engineer"
+        backstory: "Turns vague requests into concrete technical plans."
+        tools_enabled: true
+        channels: ["team_room", "eng_private"]
+      - id: "agent_bob"
+        name: "Bob"
+        role: "Product Manager"
+        backstory: "Keeps the work aligned with business goals and delivery scope."
+        tools_enabled: false
+        channels: ["team_room"]
+      - id: "agent_eve"
+        name: "Eve"
+        role: "QA Strategist"
+        backstory: "Looks for edge cases, risks, and validation gaps."
+        tools_enabled: false
+        channels: ["team_room", "eng_private"]
+```
+
+**What OpenMiro does:**
+
+- Creates the project context from YAML.
+- Builds the agent team with distinct roles and memory.
+- Connects each agent to the allowed channels.
+- Starts the simulation loop so the team can discuss architecture, scope, risks, and next steps.
+
+**Typical outcome:** The agents behave like a lightweight product squad. One agent breaks down the implementation, another keeps the scope aligned, and another reviews quality and test risks.
+
+**Example output:**
+
+```text
+[Bob -> team_room]: We should start with a minimal support bot that reads requests, classifies them, and generates a daily implementation summary.
+
+[Alice -> team_room]: I propose three components: request ingestion, planning logic, and report generation. First deliverable: a parser and a routing service.
+
+[Eve -> eng_private]: We need validation for malformed requests and a test plan for incomplete ticket data before implementation starts.
+```
+
+### Example 2 — Simulate a product planning team
+
+**Scenario:** A founder wants to test how a product team would reason about a new feature before assigning work to humans.
+
+**What the user defines:** A project with a product lead, an engineer, and a researcher, each with a different role, shared rules, and access to the same public planning channel.
+
+**What OpenMiro does:** It runs a multi-turn discussion where agents debate priorities, clarify the objective, and retain context across turns using persistent memory.
+
+**Typical outcome:** The user gets a structured conversation that surfaces tradeoffs such as delivery speed, technical complexity, and user impact.
+
+### Example 3 — Run a tool-enabled specialist team
+
+**Scenario:** A team wants one agent to access external tools while the rest of the agents focus on planning and coordination.
+
+**What the user defines:**
+
+- One agent with `tools_enabled: true`
+- MCP servers in `config/mcp_servers.yaml`
+- A private channel for tool-assisted reasoning
+
+**What OpenMiro does:** The tool-enabled agent can pull external information through MCP, then share findings back to the rest of the team through the configured channels.
+
+**Typical outcome:** The simulation combines external context with persistent agent memory, while still keeping responsibilities separated by role and channel permissions.
 
 ### Test Bifrost routing directly
 
