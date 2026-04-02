@@ -5,7 +5,7 @@ Ecco il **Documento Tecnico Architetturale per OpenMiro**. Puoi copiare interame
 # 📘 OPENMIRO - MASTER ARCHITECTURE DOCUMENT
 
 ## 1. Visione d'Insieme
-OpenMiro è una piattaforma di simulazione multi-agente per mondi digitali, riscritta da zero per garantire scalabilità, latenza minima e modularità. Il sistema abbandona i colli di bottiglia legacy (Zep, accoppiamento sincrono) in favore di un'architettura a microservizi guidata da eventi, basata sul framework **CAMEL-AI (OASIS)**, con **Hindsight** per la memoria persistente e **Bifrost** come gateway unificato per i modelli LLM.
+OpenMiro è una piattaforma di simulazione multi-agente per mondi digitali, riscritta da zero per garantire scalabilità, latenza minima e modularità. Il sistema abbandona i colli di bottiglia legacy (Zep, accoppiamento sincrono) in favore di un'architettura a microservizi guidata da eventi, basata sul framework **CAMEL-AI (OASIS)**, con **ChromaDB** per la memoria persistente e **Bifrost** come gateway unificato per i modelli LLM.
 
 ## 2. Architettura del Sistema (ASCII)
 
@@ -40,7 +40,7 @@ OpenMiro è una piattaforma di simulazione multi-agente per mondi digitali, risc
 +---------|---------------------------------|----------------------------------|----+
           v (Memoria)                       v (Azioni Reali)                   v (Inferenza testo)
 +-------------------+             +-------------------+             +-----------------------+
-|  Hindsight DB     |             |    MCP Gateway    |             |    Bifrost Gateway    |
+|  ChromaDB DB     |             |    MCP Gateway    |             |    Bifrost Gateway    |
 | (Vettori/Grafo)   |             | (CAMEL MCPToolkit)|             | (LLM Router/Balancer) |
 +-------------------+             +---------+---------+             +----------+------------+
                                             |                                  |
@@ -60,9 +60,9 @@ OpenMiro è una piattaforma di simulazione multi-agente per mondi digitali, risc
 
 ### 🟢 RELEASE 0: Foundation & LLM Routing
 **Obiettivo:** Creare lo strato inferiore (modelli e database) completamente isolato.
-*   **Componenti:** Docker Compose, Bifrost, Ollama, Hindsight.
+*   **Componenti:** Docker Compose, Bifrost, Ollama, ChromaDB.
 *   **Task Tecnici:**
-    1. Creare `docker-compose-infra.yml` per avviare Ollama e Hindsight in locale.
+    1. Creare `docker-compose-infra.yml` per avviare Ollama e ChromaDB in locale.
     2. Creare file statico `config/bifrost.yaml` per definire il routing dei modelli (es. `llama3` -> Ollama, `grok-1` -> xAI).
     3. Avviare il container Bifrost.
 *   **Test di Rilascio:** Eseguire una chiamata cURL formato OpenAI verso la porta di Bifrost richiedendo `llama3`. Verificare che Bifrost la instradi a Ollama e restituisca la risposta.
@@ -72,9 +72,9 @@ OpenMiro è una piattaforma di simulazione multi-agente per mondi digitali, risc
 *   **Componenti:** Python, CAMEL-AI, OASIS base classes.
 *   **Task Tecnici:**
     1. Creare il file statico `config/simulation_rules.yaml` (regole dell'ambiente OASIS, prompt di base).
-    2. Implementare `HindsightMemoryBlock(BaseMemory)` in Python, che sovrascrive i metodi nativi di CAMEL per salvare/leggere da Hindsight.
+    2. Implementare `ChromaDBMemoryBlock(BaseMemory)` in Python, che sovrascrive i metodi nativi di CAMEL per salvare/leggere da ChromaDB.
     3. Scrivere uno script CLI standalone che istanzia un ambiente OASIS con 2 agenti che dialogano. I LLM passano attraverso Bifrost (`ModelPlatformType.OPENAI`, puntando all'URL di Bifrost).
-*   **Test di Rilascio:** I due agenti dialogano a terminale. Spegnendo e riaccendendo lo script, gli agenti ricordano la conversazione precedente grazie al recupero da Hindsight.
+*   **Test di Rilascio:** I due agenti dialogano a terminale. Spegnendo e riaccendendo lo script, gli agenti ricordano la conversazione precedente grazie al recupero da ChromaDB.
 
 ### 🟠 RELEASE 2: Asynchronous API & Event Bus
 **Obiettivo:** Avvolgere il motore in un'architettura server e slegare l'esecuzione dal processo principale.
@@ -133,7 +133,7 @@ simulation:
     channel_prefix: "openmiro:sim_events:"
 
 memory:
-  hindsight_url: "http://localhost:8888"
+  chromadb_url: "http://localhost:8888"
   namespace: "openmiro_prod"
   retrieval_top_k: 5
 ```

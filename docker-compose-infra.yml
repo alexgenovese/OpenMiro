@@ -34,24 +34,5 @@ services:
     #           capabilities: [gpu]
     restart: unless-stopped
 
-  # Vector / Graph Memory Database
-  hindsight:
-    image: ghcr.io/vectorize-io/hindsight:latest
-    container_name: openmiro-hindsight
-    ports:
-      - "8888:8888" # API
-      - "9999:9999" # UI
-    environment:
-      # Route through Bifrost (Docker internal network: bifrost:8080)
-      - HINDSIGHT_API_LLM_PROVIDER=openai
-      # Use 9b for consolidation (faster, avoids 30s Bifrost timeout with 122b)
-      - HINDSIGHT_API_LLM_MODEL=Regolo/qwen3.5-9b
-      - HINDSIGHT_API_LLM_API_KEY=${OPENAI_API_KEY:-dummy_key}
-      - HINDSIGHT_API_LLM_BASE_URL=http://bifrost:8080/v1
-    volumes:
-      - hindsight_data:/home/hindsight/.pg0
-    restart: unless-stopped
-
 volumes:
   ollama_data:
-  hindsight_data:

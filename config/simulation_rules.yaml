@@ -29,14 +29,14 @@ projects:
         name: "Alice"
         role: "Lead Developer"
         backstory: "Alice è pragmatica, diretta e lavora molto con il codice. Preferisce soluzioni efficienti. Ha accesso ai tool di sviluppo tramite MCP."
-        model: "qwen3.5-9b"
+        model: "ollama/llama3"
         tools_enabled: true     # This agent gets MCP tools (OpenSpace)
         channels: ["public_square", "dev_private"]
       - id: "agent_bob"
         name: "Bob"
         role: "Product Manager"
         backstory: "Bob è entusiasta, focalizzato sull'utente finale. Raccoglie requisiti, assegna task e aggiorna l'umano."
-        model: "qwen3.5-9b"
+        model: "ollama/llama3"
         tools_enabled: false
         channels: ["public_square"]
 

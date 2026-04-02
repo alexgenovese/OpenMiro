@@ -18,9 +18,40 @@ from camel.types import ModelType
 from camel.memories.context_creators import ScoreBasedContextCreator
 from camel.utils.token_counting import OpenAITokenCounter
 
-from hindsight_client import Hindsight
-from src.memory.hindsight_block import HindsightMemoryBlock, HindsightAgentMemory
+from camel.storages import ChromaStorage
+from camel.storages.vectordb_storages import VectorRecord, VectorDBQuery, VectorDBQueryResult
+from camel.memories import VectorDBMemory
+from camel.embeddings import SentenceTransformerEncoder
 from src.channels import ChannelManager
+
+import json
+from typing import Any, List
+
+class SafeChromaStorage(ChromaStorage):
+    """
+    Wraps CAMEL's ChromaStorage to bypass ChromaDB's flat metadata requirement.
+    Serializes nested dicts (like CAMEL's BaseMessage representation) into strings
+    before upserting, and deserializes them back during retrieval.
+    """
+    def add(self, records: List[VectorRecord], **kwargs: Any) -> None:
+        for r in records:
+            if r.payload:
+                for k, v in r.payload.items():
+                    if isinstance(v, dict):
+                        r.payload[k] = json.dumps(v)
+        super().add(records, **kwargs)
+
+    def query(self, query: VectorDBQuery, **kwargs: Any) -> List[VectorDBQueryResult]:
+        results = super().query(query, **kwargs)
+        for res in results:
+            if res.record.payload:
+                for k, v in res.record.payload.items():
+                    if isinstance(v, str) and (v.startswith('{') or v.startswith('[')):
+                        try:
+                            res.record.payload[k] = json.loads(v)
+                        except json.JSONDecodeError:
+                            pass
+        return results
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -85,7 +116,6 @@ def _build_agent(
     agent_conf: dict,
     project_id: str,
     project_rules: list,
-    h_client: Hindsight,
     openai_url: str,
     openai_api_key: str,
     default_model: str,
@@ -113,20 +143,26 @@ def _build_agent(
     dummy_token_counter = OpenAITokenCounter(ModelType.GPT_4O_MINI)
     context_creator = ScoreBasedContextCreator(dummy_token_counter, token_limit)
 
-    # --- Critical: scoped bank_id isolates memory per project ---
-    scoped_bank_id = f"{project_id}__{agent_conf['id']}"
-    hindsight_block = HindsightMemoryBlock(client=h_client, bank_id=scoped_bank_id)
+    # --- Critical: scoped collection isolates memory per project ---
+    collection_name = f"{project_id}__{agent_conf['id']}".replace("-", "_")
+    storage = SafeChromaStorage(
+        vector_dim=384,  # all-MiniLM-L6-v2 output dimension
+        collection_name=collection_name,
+        client_type="persistent",
+        path="./data/chroma_db",
+    )
 
-    try:
-        hindsight_block.clear()
-    except Exception:
-        pass
-
-    memory = HindsightAgentMemory(
+    memory = VectorDBMemory(
         context_creator=context_creator,
-        hindsight_block=hindsight_block,
+        storage=storage,
         retrieve_limit=3,
         agent_id=agent_conf["id"],
+    )
+
+    # Overwrite the default OpenAIEmbedding with a local sentence-transformer
+    # to keep memory RAG fully local without stressing the LLM Gateway.
+    memory._vectordb_block.embedding = SentenceTransformerEncoder(
+        model_name="all-MiniLM-L6-v2"
     )
 
     agent = ChatAgent(system_message=sys_msg, model=model, memory=memory)
@@ -215,6 +251,7 @@ def main():
         help="ID of the project to simulate (defined in config/simulation_rules.yaml).",
     )
     parser.add_argument("--turns", type=int, default=4, help="Number of simulation turns.")
+    parser.add_argument("--task", type=str, default=None, help="Specific task prompt to start the simulation.")
     args = parser.parse_args()
 
     config = _load_config()
@@ -237,11 +274,13 @@ def main():
     logger.info(f"Starting project: [{project_conf['id']}] {project_conf['name']}")
 
     # Infrastructure clients
-    hindsight_url = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
-    h_client = Hindsight(base_url=hindsight_url, api_key="dummy_key")
-
     openai_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1")
     openai_api_key = os.environ.get("OPENAI_API_KEY", "dummy_key")
+
+    # Sync CAMEL's expected OPENAI_API_BASE_URL with our OPENAI_BASE_URL
+    # so that VectorDBBlock's implicit OpenAIEmbedding uses Bifrost.
+    if "OPENAI_API_BASE_URL" not in os.environ:
+        os.environ["OPENAI_API_BASE_URL"] = openai_url
 
     # --- Channel Manager ---
     channel_manager = ChannelManager()
@@ -255,7 +294,7 @@ def main():
     for ac in project_conf["team"]:
         logger.info(f"Initializing agent: {ac['name']} ({ac['role']})")
         agent = _build_agent(
-            ac, project_id, project_rules, h_client,
+            ac, project_id, project_rules,
             openai_url, openai_api_key, default_model,
         )
         _try_attach_mcp_tools(agent, ac, mcp_config)
@@ -279,9 +318,12 @@ def main():
     print("\n" + "=" * 50)
     print(f"  Project: {project_conf['name']}")
     print(f"  Objective: {project_conf.get('objective', 'N/A')}")
+    if args.task:
+        print(f"  Task: {args.task}")
     print("=" * 50 + "\n")
 
-    msg_content = f"Ciao {receiver_name}! Iniziamo a lavorare sull'obiettivo: {project_conf.get('objective', 'simulazione generale')}."
+    task_prompt = args.task or f"Iniziamo a lavorare sull'obiettivo: {project_conf.get('objective', 'simulazione generale')}."
+    msg_content = f"Ciao {receiver_name}! {task_prompt}"
     print(f"[{sender_name} -> {public_channel or 'direct'}]: {msg_content}")
 
     turn = 0

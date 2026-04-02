@@ -4,7 +4,7 @@
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
 [![CAMEL-AI](https://img.shields.io/badge/CAMEL--AI-0.2.90-green.svg)](https://github.com/camel-ai/camel)
 [![Bifrost](https://img.shields.io/badge/LLM_Router-Bifrost-orange.svg)](https://github.com/maximhq/bifrost)
-[![Hindsight](https://img.shields.io/badge/Memory-Hindsight-purple.svg)](https://github.com/hindsight-ai/hindsight)
+[![ChromaDB](https://img.shields.io/badge/Memory-ChromaDB-purple.svg)](https://github.com/chromadb-ai/chromadb)
 
 **Event-driven multi-agent simulation platform.**
 
@@ -31,10 +31,10 @@ OpenMiro is a persistent, real-time simulation engine for digital worlds populat
 
 - **Fully config-driven** — agents, projects, models, channels, and rules are defined in `.yaml` files. No code changes needed to create new simulations.
 - **LLM-agnostic via Bifrost** — the engine speaks only the standard OpenAI dialect. [Bifrost](https://github.com/maximhq/bifrost) routes traffic to any provider (Ollama, OpenAI, xAI, Regolo, etc.) with fallback and load balancing.
-- **Persistent vector/graph memory via Hindsight** — agents retain memories across restarts. Hindsight stores conversation history as an entity-relation graph, enabling semantic recall.
+- **Persistent vector/graph memory via ChromaDB** — agents retain memories across restarts. ChromaDB stores conversation history as an entity-relation graph, enabling semantic recall.
 - **Multi-project, multi-channel isolation** — each project gets its own channels (`public`, `private`) and isolated memory banks per agent, preventing cross-contamination.
 - **MCP tool integration** — agents with `tools_enabled: true` get access to real-world tools (GitHub, web, databases) via the [Model Context Protocol](https://spec.modelcontextprotocol.io/).
-- **Non-blocking memory writes** — Hindsight consolidation runs in background threads with a 30-second timeout, ensuring the simulation loop never stalls waiting for memory I/O.
+- **Non-blocking memory writes** — ChromaDB consolidation runs in background threads with a 30-second timeout, ensuring the simulation loop never stalls waiting for memory I/O.
 - **Dynamic model routing** — override the global model per-agent in config. Supports thinking models (Qwen3, o1, etc.) with configurable `max_tokens`.
 
 ---
@@ -52,8 +52,8 @@ OpenMiro is a persistent, real-time simulation engine for digital worlds populat
          |
          |-- CAMEL ChatAgent (per agent)
          |         |
-         |         |-- Memory: HindsightMemoryBlock
-         |         |         └─> Hindsight DB (vector/graph) :8888
+         |         |-- Memory: ChromaDBMemoryBlock
+         |         |         └─> ChromaDB DB (vector/graph) :8888
          |         |                    └─> LLM Consolidation via Bifrost
          |         |
          |         └-- Inference: OpenAIModel
@@ -68,10 +68,10 @@ OpenMiro is a persistent, real-time simulation engine for digital worlds populat
 | Component | Role | Port |
 |---|---|---|
 | [Bifrost](https://github.com/maximhq/bifrost) | LLM gateway — routes `provider/model` requests to any backend | `8080` |
-| [Hindsight](https://github.com/vectorize-io/hindsight) | Vector + knowledge graph memory DB for agents | `8888` (API), `9999` (UI) |
+| [ChromaDB](https://github.com/vectorize-io/chromadb) | Vector + knowledge graph memory DB for agents | `8888` (API), `9999` (UI) |
 | [Ollama](https://ollama.com) | Local LLM inference (optional) | `11434` |
 | `src/main.py` | Simulation entrypoint — loads config, builds agents, runs turn loop | — |
-| `src/memory/hindsight_block.py` | CAMEL `MemoryBlock` adapter bridging CAMEL ↔ Hindsight | — |
+| `src/memory/chromadb_block.py` | CAMEL `MemoryBlock` adapter bridging CAMEL ↔ ChromaDB | — |
 
 ### How Self-Learning Works In A Multi-Agent System
 
@@ -81,7 +81,7 @@ The learning loop is:
 
 1. **Observe**: each agent receives new messages from allowed channels.
 2. **Reason**: the agent produces a response using its role, rules, and current context.
-3. **Store**: interaction traces are written to Hindsight (vector + graph memory).
+3. **Store**: interaction traces are written to ChromaDB (vector + graph memory).
 4. **Recall**: on later turns, relevant past memories are retrieved and injected back into context.
 5. **Adapt**: agents refine decisions based on what previously worked, failed, or remained unresolved.
 
@@ -97,7 +97,7 @@ In practice, this creates an emergent team memory where agents become more consi
 **Self-learning flow (conceptual):**
 
 ```text
-Turn N input -> Agent reasoning -> Message output -> Hindsight retention
+Turn N input -> Agent reasoning -> Message output -> ChromaDB retention
        ^                                  |
        |                                  v
      Memory recall on Turn N+1 <- Retrieved relevant context
@@ -124,8 +124,8 @@ docker-compose -f docker-compose-infra.yml up -d
 | Service | URL | Purpose |
 |---|---|---|
 | Bifrost | http://localhost:8080 | LLM router — configure your provider here |
-| Hindsight API | http://localhost:8888 | Agent memory API |
-| Hindsight UI | http://localhost:9999 | Browse memory banks visually |
+| ChromaDB API | http://localhost:8888 | Agent memory API |
+| ChromaDB UI | http://localhost:9999 | Browse memory banks visually |
 | Ollama | http://localhost:11434 | Local inference (optional) |
 
 ### 2. Configure your LLM provider
@@ -162,7 +162,7 @@ HINDSIGHT_URL="http://localhost:8888"
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "camel-ai==0.2.90" hindsight-client pyyaml python-dotenv
+pip install "camel-ai==0.2.90" chromadb-client pyyaml python-dotenv
 ```
 
 ### 5. Run your first simulation
@@ -254,7 +254,7 @@ mcp_servers:
 | `OPENAI_BASE_URL` | Yes | Must point to Bifrost: `http://localhost:8080/v1` |
 | `OPENAI_API_KEY` | Yes | Your provider API key (passed through Bifrost) |
 | `OPENAI_MODEL_NAME` | Yes | `ProviderName/model` format (e.g. `Ollama/qwen2.5:7b`) |
-| `HINDSIGHT_URL` | Yes | Hindsight API endpoint: `http://localhost:8888` |
+| `HINDSIGHT_URL` | Yes | ChromaDB API endpoint: `http://localhost:8888` |
 | `OPENSPACE_API_KEY` | No | Required only if using OpenSpace MCP tools |
 
 ---
@@ -372,7 +372,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-### Test Hindsight memory API
+### Test ChromaDB memory API
 
 ```bash
 curl http://localhost:8888/health
@@ -384,8 +384,8 @@ curl http://localhost:8888/health
 
 | Release | Status | Description |
 |---|---|---|
-| **Release 0** — Foundation | ✅ Done | Docker Compose: Bifrost + Hindsight + Ollama |
-| **Release 1** — Core Engine | ✅ Done | CAMEL agents + Hindsight memory + Bifrost routing + CLI |
+| **Release 0** — Foundation | ✅ Done | Docker Compose: Bifrost + ChromaDB + Ollama |
+| **Release 1** — Core Engine | ✅ Done | CAMEL agents + ChromaDB memory + Bifrost routing + CLI |
 | **Release 2** — Async API | Planned | FastAPI + Redis Event Bus + background workers |
 | **Release 3** — Realtime UI | Planned | WebSocket frontend + live agent interaction dashboard |
 
@@ -402,7 +402,7 @@ Contributions are welcome. Please follow the conventions in `.github/copilot-ins
 1. Fork the repository and create a feature branch: `git checkout -b feat/your-feature`
 2. Follow these conventions:
    - Use strict type hints in `src/memory/` — this is the infrastructure layer
-   - Wrap all Hindsight/Bifrost calls in `try/except` — the engine must never crash on memory failures
+   - Wrap all ChromaDB/Bifrost calls in `try/except` — the engine must never crash on memory failures
    - Use `logging` only (no `print()`) inside `src/memory/`
    - All blocking network calls must have a timeout — 30 seconds maximum per the memory-layer guidelines
 3. Test your changes: `python src/main.py --project proj_alpha_test --turns 1`
@@ -427,9 +427,9 @@ OPENAI_BASE_URL="http://localhost:8080/v1"
 
 Check whether Bifrost has `chat_completion` enabled for your provider. Open `http://localhost:8080` → Providers → your provider → enable "Chat Completions".
 
-**`Connection verification failed: Method Not Allowed` in Hindsight logs**
+**`Connection verification failed: Method Not Allowed` in ChromaDB logs**
 
-Hindsight's LLM base URL also needs `/v1`. In `docker-compose-infra.yml`:
+ChromaDB's LLM base URL also needs `/v1`. In `docker-compose-infra.yml`:
 
 ```yaml
 - HINDSIGHT_API_LLM_BASE_URL=http://bifrost:8080/v1   # /v1 required
@@ -438,12 +438,12 @@ Hindsight's LLM base URL also needs `/v1`. In `docker-compose-infra.yml`:
 Recreate the container after editing:
 
 ```bash
-docker-compose -f docker-compose-infra.yml up -d --force-recreate hindsight
+docker-compose -f docker-compose-infra.yml up -d --force-recreate chromadb
 ```
 
 **`retain_batch timed out after 30s` warnings**
 
-Expected behaviour. Hindsight's memory consolidation (LLM-based graph extraction) runs in a background thread — the 30-second timeout prevents it from blocking the simulation loop. Consolidation completes asynchronously. To speed it up, use a smaller model for Hindsight:
+Expected behaviour. ChromaDB's memory consolidation (LLM-based graph extraction) runs in a background thread — the 30-second timeout prevents it from blocking the simulation loop. Consolidation completes asynchronously. To speed it up, use a smaller model for ChromaDB:
 
 ```yaml
 # docker-compose-infra.yml

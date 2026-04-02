@@ -74,3 +74,5 @@ coverage.xml
 .vscode/
 *.swp
 *.swo
+CLAUDE.md
+.github/*
